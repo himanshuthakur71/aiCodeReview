@@ -1,6 +1,5 @@
 name: AI Code Review
 
-# Run on every pull request
 on:
   pull_request:
     branches: [main, develop]
@@ -10,38 +9,31 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # Get the code
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
-      # Setup Node.js
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
       
-      # Install dependencies
       - name: Install dependencies
         run: npm ci
       
-      # Check Svelte code for errors
       - name: Svelte Check
         run: npm run check
         continue-on-error: true
       
-      # Run linting
       - name: Lint Code
         run: npm run lint
         continue-on-error: true
       
-      # Format check
       - name: Check Formatting
         run: npm run format:check
         continue-on-error: true
       
-      # Post results as comment
       - name: Comment Results
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7 
         if: always()
         with:
           script: |

@@ -10,39 +10,35 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  
       
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4  
         with:
           node-version: '18'
       
       - name: Install dependencies
         run: npm ci
       
-      # Build the app
       - name: Build app
         run: npm run build
       
-      # Start preview server in background
       - name: Start preview server
         run: |
           npm run preview &
-          sleep 5
+          sleep 10
       
-      # Run Lighthouse
       - name: Run Lighthouse
-        uses: treosh/lighthouse-ci-action@v9
+        uses: treosh/lighthouse-ci-action@v12  
         with:
           urls: |
             http://localhost:4173
           uploadArtifacts: true
           temporaryPublicStorage: true
       
-      # Check bundle size
       - name: Check bundle size
         run: |
           npm run build -- --mode production
           du -sh build/
           echo "Bundle size:" >> $GITHUB_STEP_SUMMARY
-          du -h build/_app/immutable/chunks/* >> $GITHUB_STEP_SUMMARY
+          du -h build/_app/immutable/chunks/* 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No chunks found" >> $GITHUB_STEP_SUMMARY
