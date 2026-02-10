@@ -3,102 +3,97 @@ name: Claude AI Code Review
 on:
   pull_request:
     branches: [main, develop]
-  push:
-    branches: [main]
 
 jobs:
   claude-review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     
     steps:
-      - name: 📥 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: 🔧 Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
       
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: npm ci
       
-      - name: 🤖 Run Claude AI Review
+      - name: Run Claude AI Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run ai-review
         continue-on-error: true
       
-      - name: 📊 Upload Results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: claude-review-results
+          name: ai-review-results
           path: ai-review-results.json
       
-      - name: 💬 Post Results as Comment
+      - name: Post PR comments
         uses: actions/github-script@v7
         if: github.event_name == 'pull_request' && always()
         with:
           script: |
             const fs = require('fs');
             
+            let results;
             try {
-              const data = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
-              
-              let comment = '## 🤖 Claude AI Code Review\n\n';
-              comment += `**Model:** ${data.model}\n`;
-              comment += `**Files Reviewed:** ${data.filesReviewed}\n`;
-              comment += `**Timestamp:** ${data.timestamp}\n\n`;
-              
-              if (data.filesWithIssues === 0) {
-                comment += '### ✅ No Issues Found!\n\n';
-                comment += 'Your code looks great! All Svelte 5 best practices followed.\n';
-              } else {
-                comment += `### ⚠️ Found Issues in ${data.filesWithIssues} File(s)\n\n`;
-                
-                let errorCount = 0;
-                let warningCount = 0;
-                
-                data.issues.forEach(({ file, issues }) => {
-                  comment += `#### 📄 \`${file}\`\n\n`;
-                  
-                  issues.slice(0, 5).forEach(issue => {
-                    const icon = issue.severity === 'error' ? '❌' : '⚠️';
-                    const badge = issue.category ? `\`${issue.category}\`` : '';
-                    
-                    if (issue.severity === 'error') errorCount++;
-                    else warningCount++;
-                    
-                    comment += `${icon} **Line ${issue.line}** ${badge}\n`;
-                    comment += `- ${issue.message}\n`;
-                    comment += `- 💡 *${issue.suggestion}*\n\n`;
-                  });
-                  
-                  if (issues.length > 5) {
-                    comment += `... and ${issues.length - 5} more issues\n\n`;
-                  }
-                });
-                
-                comment += `---\n\n`;
-                comment += `**Summary:** ${errorCount} errors, ${warningCount} warnings\n\n`;
-                comment += `📥 [Download full report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n`;
-              }
-              
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: comment
-              });
-              
-            } catch (error) {
-              console.log('Could not read results file:', error.message);
-              
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '⚠️ Claude AI review completed but results file not found. Check the Actions logs.'
-              });
+              const data = fs.readFileSync('ai-review-results.json', 'utf8');
+              results = JSON.parse(data);
+            } catch (e) {
+              console.log('No results file found');
+              return;
             }
+            
+            if (!results.issues || results.issues.length === 0) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '## Claude AI Code Review\n\nNo issues found!'
+              });
+              return;
+            }
+            
+            for (const fileData of results.issues) {
+              for (const issue of fileData.issues) {
+                const severity = issue.severity === 'error' ? 'ERROR' : 'WARNING';
+                const category = issue.category || 'General';
+                const commentBody = '**' + severity + ': ' + category + '**\n\n' + issue.message + '\n\n**Suggestion:** ' + issue.suggestion + '\n\n---\n*Claude AI Review*';
+                
+                try {
+                  await github.rest.pulls.createReviewComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    body: commentBody,
+                    path: fileData.file,
+                    line: issue.line,
+                    side: 'RIGHT'
+                  });
+                } catch (err) {
+                  console.log('Failed to post comment:', err.message);
+                }
+              }
+            }
+            
+            const totalIssues = results.issues.reduce((sum, f) => sum + f.issues.length, 0);
+            let summary = '## Claude AI Code Review Summary\n\n';
+            summary += '- Issues found: ' + totalIssues + '\n';
+            summary += '- Files with issues: ' + results.filesWithIssues + '\n';
+            summary += '- Files reviewed: ' + results.filesReviewed + '\n';
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });

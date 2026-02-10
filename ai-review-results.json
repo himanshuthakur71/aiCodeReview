@@ -1,60 +1,67 @@
 {
-  "timestamp": "2026-02-10T14:04:34.600Z",
-  "model": "claude-3-5-sonnet-20241022",
+  "timestamp": "2026-02-10T14:13:33.065Z",
+  "model": "claude-3-haiku-20240307",
   "filesReviewed": 3,
-  "filesWithIssues": 2,
+  "filesWithIssues": 3,
   "issues": [
     {
       "file": "src\\lib\\components\\UserProfile.svelte",
       "issues": [
         {
-          "line": 4,
+          "line": 15,
           "severity": "error",
           "category": "svelte-5",
-          "message": "Not using Svelte 5 runes ($state, $derived, $effect)",
-          "suggestion": "Replace with $state, $derived, $effect"
+          "message": "Using old reactive syntax",
+          "suggestion": "Replace with $derived"
         },
         {
-          "line": 10,
+          "line": 11,
+          "severity": "error",
+          "category": "error-handling",
+          "message": "No error handling in fetch",
+          "suggestion": "Add error handling to the fetch request"
+        },
+        {
+          "line": 21,
+          "severity": "warning",
+          "category": "best-practices",
+          "message": "console.log in production code",
+          "suggestion": "Remove console.log or use it only for debugging"
+        },
+        {
+          "line": 24,
           "severity": "error",
           "category": "svelte-5",
-          "message": "Using old reactive syntax ($:)",
-          "suggestion": "Replace with $derived: let displayName = $derived(userName.toUpperCase())"
+          "message": "Using old reactive syntax",
+          "suggestion": "Replace with $derived"
         },
         {
-          "line": 13,
+          "line": 28,
           "severity": "warning",
           "category": "accessibility",
-          "message": "Missing error handling in fetch",
-          "suggestion": "Add error handling with try/catch or .catch()"
+          "message": "div used instead of button",
+          "suggestion": "Use a button element for better accessibility"
         },
         {
-          "line": 16,
-          "severity": "warning",
-          "category": "performance",
-          "message": "console.log in production code",
-          "suggestion": "Remove console.log or use it conditionally"
-        },
-        {
-          "line": 36,
-          "severity": "warning",
+          "line": 32,
+          "severity": "error",
           "category": "accessibility",
           "message": "Image without alt text",
-          "suggestion": "Add alt text to the image"
+          "suggestion": "Add alt text to the image for accessibility"
         },
         {
           "line": 44,
           "severity": "warning",
           "category": "accessibility",
           "message": "Using div with onclick instead of button",
-          "suggestion": "Use a button element with on:click"
+          "suggestion": "Use a button element for better accessibility"
         },
         {
-          "line": 53,
+          "line": 63,
           "severity": "warning",
           "category": "accessibility",
           "message": "Poor color contrast",
-          "suggestion": "Improve color contrast to meet WCAG 2.1 AA standards"
+          "suggestion": "Improve color contrast for better accessibility"
         }
       ]
     },
@@ -65,8 +72,20 @@
           "line": 5,
           "severity": "error",
           "category": "svelte-5",
-          "message": "Improper use of $props()",
-          "suggestion": "Use the $page store instead: let { children } = $page;"
+          "message": "Using old reactive syntax",
+          "suggestion": "Replace with $derived"
+        }
+      ]
+    },
+    {
+      "file": "src\\routes\\+page.svelte",
+      "issues": [
+        {
+          "line": 15,
+          "severity": "error",
+          "category": "svelte-5",
+          "message": "Using old reactive syntax",
+          "suggestion": "Replace with $derived"
         }
       ]
     }
