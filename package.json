@@ -12,7 +12,7 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"ai-review": "node scripts/ai-review.js"
+		"ai-review": "node scripts/ai-review-claude.js"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.2",
@@ -35,5 +35,9 @@
 		"typescript": "^5.9.3",
 		"typescript-eslint": "^8.54.0",
 		"vite": "^7.3.1"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.74.0",
+		"dotenv": "^17.2.4"
 	}
 }
