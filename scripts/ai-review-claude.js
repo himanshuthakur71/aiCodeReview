@@ -12,7 +12,7 @@ async function reviewWithClaude(filePath, content) {
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022', // Latest Sonnet model
+      model: 'claude-3-haiku-20240307', //  Sonnet model
       max_tokens: 2048,
       temperature: 0.3,
       messages: [
