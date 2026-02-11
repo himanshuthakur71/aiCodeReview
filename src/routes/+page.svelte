@@ -1,3 +1,9 @@
+<script>
+  import UserProfile  from "$lib/components/UserProfile.svelte"
+</script>
+
+
+<UserProfile />
 
 <main>
   <h1>Welcome to My App</h1>
