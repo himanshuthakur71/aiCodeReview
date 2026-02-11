@@ -28,7 +28,6 @@ jobs:
       - name: Fetch base branch
         run: |
           git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
-          git branch -a
       
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -38,6 +37,13 @@ jobs:
       
       - name: Install
         run: npm ci
+      
+      - name: Download Previous Review
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: previous-review
+          path: .
       
       - name: AI Review
         env:
@@ -49,7 +55,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: npm run ai-review || true
       
-      - name: Post Review with Approval
+      - name: Post Comments and Auto-Resolve
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.generate-token.outputs.token }}
@@ -59,75 +65,162 @@ jobs:
             try {
               results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
             } catch (e) {
-              console.log('No results file');
+              console.log('No results');
               return;
             }
             
-            const sev = { critical: '🔴', error: '🟠', warning: '🟡', info: '🔵' };
-            const lab = { critical: 'CRITICAL', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
+            const icons = {
+              critical: '🔴',
+              error: '🟠', 
+              warning: '🟡',
+              info: '🔵'
+            };
             
-            let comments = [];
-            if (results.issues && results.issues.length > 0) {
-              for (const fd of results.issues) {
-                for (const iss of fd.issues) {
-                  let body = sev[iss.severity] + ' **' + lab[iss.severity] + ': ' + (iss.category || 'GENERAL').toUpperCase() + '**\n\n';
-                  body += '**Problem:** ' + iss.issue + '\n\n';
-                  if (iss.code) body += '**Code:**\n```svelte\n' + iss.code + '\n```\n\n';
-                  if (iss.suggestion) body += '**Fix:**\n```svelte\n' + iss.suggestion + '\n```\n\n';
-                  if (iss.impact) body += '**Impact:** ' + iss.impact + '\n\n';
-                  body += '\n_AI Review by Claude_';
-                  comments.push({ path: fd.file, line: iss.line, body });
+            // Get all existing review comments from this bot
+            let existingComments = [];
+            try {
+              const reviews = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              
+              for (const review of reviews.data) {
+                if (review.user.type === 'Bot' || review.user.login.includes('[bot]')) {
+                  try {
+                    const comments = await github.rest.pulls.listCommentsForReview({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: context.issue.number,
+                      review_id: review.id
+                    });
+                    existingComments.push(...comments.data);
+                  } catch (e) {
+                    console.log('Could not fetch review comments');
+                  }
+                }
+              }
+            } catch (e) {
+              console.log('Could not fetch reviews');
+            }
+            
+            // Build map of current issues
+            const currentIssuesMap = new Map();
+            if (results.issues) {
+              results.issues.forEach(fileData => {
+                fileData.issues.forEach(issue => {
+                  const key = `${fileData.file}:${issue.line}:${issue.category}`;
+                  currentIssuesMap.set(key, issue);
+                });
+              });
+            }
+            
+            // Auto-resolve fixed issues
+            let resolvedCount = 0;
+            for (const comment of existingComments) {
+              if (!comment.path || !comment.line) continue;
+              
+              // Try to extract category from comment body
+              let category = 'unknown';
+              if (comment.body.includes('SVELTE')) category = 'svelte-5';
+              else if (comment.body.includes('ACCESSIBILITY')) category = 'accessibility';
+              else if (comment.body.includes('PERFORMANCE')) category = 'performance';
+              else if (comment.body.includes('SECURITY')) category = 'security';
+              else if (comment.body.includes('CODE QUALITY')) category = 'code-quality';
+              else if (comment.body.includes('TYPE SAFETY')) category = 'type-safety';
+              
+              const key = `${comment.path}:${comment.line}:${category}`;
+              
+              // If issue no longer exists, mark as resolved
+              if (!currentIssuesMap.has(key)) {
+                try {
+                  await github.rest.pulls.createReplyForReviewComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    comment_id: comment.id,
+                    body: '✅ **Fixed!** This issue has been resolved in the latest commit.'
+                  });
+                  resolvedCount++;
+                  console.log('Resolved:', comment.path, 'line', comment.line);
+                } catch (e) {
+                  console.log('Could not resolve comment:', e.message);
                 }
               }
             }
             
-            let reviewEvent = 'APPROVE';
-            let body = '## 🤖 AI Code Review\n\n';
+            // POST NEW INLINE COMMENTS
+            let newComments = 0;
+            if (results.issues && results.issues.length > 0) {
+              for (const fileData of results.issues) {
+                for (const issue of fileData.issues) {
+                  const icon = icons[issue.severity] || '⚪';
+                  
+                  let body = icon + ' **' + (issue.category || 'issue').toUpperCase().replace(/-/g, ' ') + '**\n\n';
+                  body += issue.issue + '\n\n';
+                  
+                  if (issue.code) {
+                    body += '```svelte\n' + issue.code + '\n```\n\n';
+                  }
+                  
+                  if (issue.suggestion) {
+                    body += '**Fix:**\n```svelte\n' + issue.suggestion + '\n```\n\n';
+                  }
+                  
+                  if (issue.impact) {
+                    body += '💡 ' + issue.impact;
+                  }
+                  
+                  try {
+                    await github.rest.pulls.createReviewComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: context.issue.number,
+                      body: body,
+                      path: fileData.file,
+                      line: issue.line,
+                      side: 'RIGHT'
+                    });
+                    newComments++;
+                  } catch (err) {
+                    console.log('Failed inline comment:', err.message);
+                  }
+                }
+              }
+            }
+            
+            // POST REVIEW SUMMARY
+            let reviewEvent = 'COMMENT';
+            let reviewBody = '## 🤖 AI Code Review\n\n';
+            
+            if (resolvedCount > 0) {
+              reviewBody += '✅ **' + resolvedCount + ' issue(s) fixed!**\n\n';
+            }
             
             if (results.filesReviewed === 0) {
-              body += '**No Svelte files changed**\n\n';
-              body += 'No review needed.\n';
               reviewEvent = 'APPROVE';
+              reviewBody += '✅ No files changed\n';
             } else if (results.criticalCount > 0) {
               reviewEvent = 'REQUEST_CHANGES';
-              body += '**CRITICAL ISSUES FOUND**\n\n';
-              body += '**Must be fixed before merging**\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
-              body += '- Critical: ' + results.criticalCount + '\n';
-              body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
+              reviewBody += '🔴 **' + results.criticalCount + ' critical** - Fix required\n';
             } else if (results.errorCount > 0) {
               reviewEvent = 'COMMENT';
-              body += '**Errors Found**\n\n';
-              body += 'Please review and fix.\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
-              body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
+              reviewBody += '🟠 **' + results.errorCount + ' error(s)**\n';
             } else if (results.warningCount > 0) {
               reviewEvent = 'APPROVE';
-              body += '**Approved with Minor Warnings**\n\n';
-              body += 'Code is acceptable. Consider fixing warnings.\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
-              body += '- Info: ' + results.infoCount + '\n';
+              reviewBody += '✅ Approved (' + results.warningCount + ' warnings)\n';
             } else {
               reviewEvent = 'APPROVE';
-              body += '**All Checks Passed**\n\n';
-              body += 'No issues found!\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
+              reviewBody += '✅ Perfect! No issues\n';
             }
             
-            if (results.changedFiles && results.changedFiles.length > 0) {
-              body += '\n**Files Reviewed:**\n';
-              results.changedFiles.forEach(f => body += '- `' + f + '`\n');
-            }
+            reviewBody += '\n**Stats:**\n';
+            reviewBody += '- Reviewed: ' + results.filesReviewed + ' files\n';
+            if (newComments > 0) reviewBody += '- New comments: ' + newComments + '\n';
+            if (resolvedCount > 0) reviewBody += '- Resolved: ' + resolvedCount + '\n';
             
             if (results.analytics && results.analytics.insights) {
-              body += '\n---\n' + results.analytics.insights;
+              reviewBody += '\n---\n' + results.analytics.insights;
             }
             
             try {
@@ -136,16 +229,17 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: context.issue.number,
                 event: reviewEvent,
-                body: body,
-                comments: comments
+                body: reviewBody
               });
               console.log('Review posted:', reviewEvent);
-            } catch (err) {
-              console.log('Error posting review:', err.message);
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body
-              });
+            } catch (e) {
+              console.log('Review error:', e.message);
             }
+      
+      - name: Save Review State
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: previous-review
+          path: previous-review.json
+          retention-days: 30

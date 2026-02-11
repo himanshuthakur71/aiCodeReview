@@ -26,3 +26,4 @@ vite.config.ts.timestamp-*
 .ai-review-cache/
 ai-review-analytics.json
 ai-review-results.json
+previous-review.json

@@ -19,12 +19,10 @@ function getChangedFiles() {
     let changedFiles = '';
     
     if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
-      // In GitHub Actions PR
       const baseSha = process.env.PR_BASE_SHA;
       const headSha = process.env.PR_HEAD_SHA;
       
       if (baseSha && headSha) {
-        // Method 1: Compare using SHAs
         try {
           changedFiles = execSync(
             `git diff --name-only ${baseSha}...${headSha}`,
@@ -32,7 +30,6 @@ function getChangedFiles() {
           );
           console.log('Using SHA comparison');
         } catch (e1) {
-          // Method 2: Use HEAD and origin/base
           try {
             const base = process.env.GITHUB_BASE_REF || 'main';
             changedFiles = execSync(
@@ -41,7 +38,6 @@ function getChangedFiles() {
             );
             console.log('Using branch comparison');
           } catch (e2) {
-            // Method 3: Compare last 2 commits
             try {
               changedFiles = execSync(
                 'git diff --name-only HEAD~1 HEAD',
@@ -59,7 +55,6 @@ function getChangedFiles() {
         return findAllSvelteFiles('./src');
       }
     } else {
-      // Local development
       try {
         changedFiles = execSync('git diff --name-only HEAD', { encoding: 'utf8' });
         if (!changedFiles.trim()) {
@@ -110,7 +105,6 @@ function findAllSvelteFiles(dir) {
   return files;
 }
 
-
 async function reviewWithClaude(filePath, reviewContent, changedLines, strategy) {
   const changedLinesStr = changedLines && changedLines.length > 0 
     ? `Lines ${changedLines.join(', ')}` 
@@ -127,32 +121,22 @@ async function reviewWithClaude(filePath, reviewContent, changedLines, strategy)
       temperature: strategy.temperature,
       messages: [{
         role: 'user',
-        content: `You are a senior Svelte developer conducting a code review.
+        content: `You are a senior code reviewer. Review this Svelte 5 code.
 
 ${strategyPrompt}
 
-Analyze this code for:
-1. **Svelte 5 Best Practices** - Proper runes usage
-2. **Accessibility** - WCAG 2.1 AA compliance
-3. **Performance** - Re-renders, memory leaks
-4. **Security** - XSS, input validation
-5. **Code Quality** - Readability, maintainability
-6. **Type Safety** - Missing types
+For EACH issue:
+1. Line number (exact)
+2. Problematic code (the actual line)
+3. Severity: "critical", "error", "warning", or "info"
+4. Category: svelte-5, accessibility, performance, security, code-quality, or type-safety
+5. Issue: ONE sentence explaining the problem
+6. Suggestion: The FIXED code (just the code, no explanation)
+7. Impact: ONE sentence why this matters
 
-For EACH issue provide:
-- Exact line number
-- The problematic code
-- Severity: "critical", "error", "warning", or "info"
-- Category: [svelte-5, accessibility, performance, security, code-quality, type-safety]
-- Clear explanation
-- Specific fix with code
-- Impact on users/developers
+${changedLines && changedLines.length > 0 ? `Lines marked with ">" are NEW/CHANGED.` : ''}
 
-${changedLines && changedLines.length > 0 ? `
-Lines marked with ">" are NEW/CHANGED. Focus on these but consider context.
-` : ''}
-
-Return ONLY valid JSON:
+Return ONLY valid JSON array:
 [
   {
     "line": 15,
@@ -161,11 +145,15 @@ Return ONLY valid JSON:
     "category": "svelte-5",
     "issue": "Using deprecated reactive syntax",
     "suggestion": "let doubled = $derived(count * 2);",
-    "impact": "Will break in future Svelte versions"
+    "impact": "Will break in Svelte 6"
   }
 ]
 
-If no issues: []
+CRITICAL RULES:
+- Keep issue/impact to ONE SHORT sentence each
+- Suggestion should be ONLY the fixed code
+- Be specific and actionable
+- If no issues: return []
 
 Code:
 ${reviewContent}
@@ -251,6 +239,51 @@ async function reviewFilesInParallel(files) {
   return allIssues;
 }
 
+function compareWithPreviousReview(currentIssues, previousReviewFile = 'previous-review.json') {
+  let previousIssues = [];
+  
+  try {
+    if (fs.existsSync(previousReviewFile)) {
+      const prev = JSON.parse(fs.readFileSync(previousReviewFile, 'utf8'));
+      previousIssues = prev.issues || [];
+    }
+  } catch (e) {
+    console.log('No previous review found');
+  }
+  
+  // Find issues that were fixed
+  const fixedIssues = [];
+  
+  previousIssues.forEach(prevFile => {
+    prevFile.issues.forEach(prevIssue => {
+      // Check if this issue still exists
+      let stillExists = false;
+      
+      currentIssues.forEach(currFile => {
+        if (currFile.file === prevFile.file) {
+          currFile.issues.forEach(currIssue => {
+            if (currIssue.line === prevIssue.line && 
+                currIssue.category === prevIssue.category) {
+              stillExists = true;
+            }
+          });
+        }
+      });
+      
+      if (!stillExists) {
+        fixedIssues.push({
+          file: prevFile.file,
+          line: prevIssue.line,
+          category: prevIssue.category,
+          issue: prevIssue.issue
+        });
+      }
+    });
+  });
+  
+  return { fixedIssues };
+}
+
 async function main() {
   console.log('='.repeat(60));
   console.log('Enhanced AI Code Review System');
@@ -282,10 +315,12 @@ async function main() {
       infoCount: 0,
       reviewStatus: 'approved',
       reviewMessage: 'No Svelte files changed',
-      issues: []
+      issues: [],
+      fixedIssues: []
     };
     
     fs.writeFileSync('ai-review-results.json', JSON.stringify(results, null, 2));
+    fs.writeFileSync('previous-review.json', JSON.stringify(results, null, 2));
     process.exit(0);
   }
   
@@ -293,6 +328,9 @@ async function main() {
   
   // Review files in parallel
   const allIssues = await reviewFilesInParallel(files);
+  
+  // Compare with previous review to find fixed issues
+  const { fixedIssues } = compareWithPreviousReview(allIssues);
   
   // Calculate statistics
   let criticalCount = 0;
@@ -342,7 +380,8 @@ async function main() {
     reviewStatus,
     reviewMessage,
     changedFiles: files,
-    issues: allIssues
+    issues: allIssues,
+    fixedIssues: fixedIssues
   };
   
   // Track analytics
@@ -350,14 +389,20 @@ async function main() {
   const analytics = getAnalyticsSummary();
   results.analytics = analytics;
   
-  // Save results
+  // Save current results
   fs.writeFileSync('ai-review-results.json', JSON.stringify(results, null, 2));
+  
+  // Save as previous review for next run
+  fs.writeFileSync('previous-review.json', JSON.stringify(results, null, 2));
   
   // Display summary
   console.log('\n' + '='.repeat(60));
   console.log('REVIEW COMPLETE');
   console.log('='.repeat(60));
   console.log('Files Reviewed:', files.length);
+  if (fixedIssues.length > 0) {
+    console.log('Fixed Issues:', fixedIssues.length);
+  }
   console.log('Total Issues:', totalIssues);
   console.log('  Critical:', criticalCount);
   console.log('  Errors:', errorCount);
