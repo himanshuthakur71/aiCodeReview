@@ -55,19 +55,29 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: npm run ai-review || true
       
-      - name: Post Comments and Auto-Resolve
+      - name: Debug Results
+        run: |
+          echo "=== AI Review Results ==="
+          cat ai-review-results.json || echo "No results file"
+      
+      - name: Post Inline Comments
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.generate-token.outputs.token }}
           script: |
             const fs = require('fs');
             let results;
+            
             try {
-              results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
+              const content = fs.readFileSync('ai-review-results.json', 'utf8');
+              console.log('Raw results:', content);
+              results = JSON.parse(content);
             } catch (e) {
-              console.log('No results');
+              console.log('Error reading results:', e.message);
               return;
             }
+            
+            console.log('Parsed results:', JSON.stringify(results, null, 2));
             
             const icons = {
               critical: '🔴',
@@ -76,51 +86,43 @@ jobs:
               info: '🔵'
             };
             
-            // Get all existing review comments from this bot
+            // Get existing comments
             let existingComments = [];
             try {
-              const reviews = await github.rest.pulls.listReviews({
+              const comments = await github.rest.pulls.listReviewComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.issue.number
               });
-              
-              for (const review of reviews.data) {
-                if (review.user.type === 'Bot' || review.user.login.includes('[bot]')) {
-                  try {
-                    const comments = await github.rest.pulls.listCommentsForReview({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      pull_number: context.issue.number,
-                      review_id: review.id
-                    });
-                    existingComments.push(...comments.data);
-                  } catch (e) {
-                    console.log('Could not fetch review comments');
-                  }
-                }
-              }
+              existingComments = comments.data || [];
+              console.log('Found', existingComments.length, 'existing comments');
             } catch (e) {
-              console.log('Could not fetch reviews');
+              console.log('Could not fetch existing comments:', e.message);
             }
             
             // Build map of current issues
             const currentIssuesMap = new Map();
-            if (results.issues) {
+            if (results.issues && Array.isArray(results.issues)) {
               results.issues.forEach(fileData => {
-                fileData.issues.forEach(issue => {
-                  const key = `${fileData.file}:${issue.line}:${issue.category}`;
-                  currentIssuesMap.set(key, issue);
-                });
+                console.log('Processing file:', fileData.file);
+                if (fileData.issues && Array.isArray(fileData.issues)) {
+                  fileData.issues.forEach(issue => {
+                    const key = `${fileData.file}:${issue.line}:${issue.category}`;
+                    currentIssuesMap.set(key, issue);
+                    console.log('Added issue:', key);
+                  });
+                }
               });
             }
+            
+            console.log('Total current issues:', currentIssuesMap.size);
             
             // Auto-resolve fixed issues
             let resolvedCount = 0;
             for (const comment of existingComments) {
               if (!comment.path || !comment.line) continue;
+              if (comment.user.type !== 'Bot') continue;
               
-              // Try to extract category from comment body
               let category = 'unknown';
               if (comment.body.includes('SVELTE')) category = 'svelte-5';
               else if (comment.body.includes('ACCESSIBILITY')) category = 'accessibility';
@@ -131,7 +133,6 @@ jobs:
               
               const key = `${comment.path}:${comment.line}:${category}`;
               
-              // If issue no longer exists, mark as resolved
               if (!currentIssuesMap.has(key)) {
                 try {
                   await github.rest.pulls.createReplyForReviewComment({
@@ -139,40 +140,56 @@ jobs:
                     repo: context.repo.repo,
                     pull_number: context.issue.number,
                     comment_id: comment.id,
-                    body: '✅ **Fixed!** This issue has been resolved in the latest commit.'
+                    body: '✅ **Fixed!** This issue has been resolved.'
                   });
                   resolvedCount++;
-                  console.log('Resolved:', comment.path, 'line', comment.line);
+                  console.log('Resolved:', key);
                 } catch (e) {
-                  console.log('Could not resolve comment:', e.message);
+                  console.log('Could not resolve:', e.message);
                 }
               }
             }
             
             // POST NEW INLINE COMMENTS
             let newComments = 0;
-            if (results.issues && results.issues.length > 0) {
+            let failedComments = 0;
+            
+            if (results.issues && Array.isArray(results.issues) && results.issues.length > 0) {
               for (const fileData of results.issues) {
+                console.log('\nProcessing file:', fileData.file);
+                
+                if (!fileData.issues || !Array.isArray(fileData.issues)) {
+                  console.log('No issues array for file');
+                  continue;
+                }
+                
                 for (const issue of fileData.issues) {
-                  const icon = icons[issue.severity] || '⚪';
+                  console.log('Processing issue at line', issue.line);
                   
-                  let body = icon + ' **' + (issue.category || 'issue').toUpperCase().replace(/-/g, ' ') + '**\n\n';
-                  body += issue.issue + '\n\n';
+                  const icon = icons[issue.severity] || '⚪';
+                  const category = (issue.category || 'issue').toUpperCase().replace(/-/g, ' ');
+                  
+                  let body = icon + ' **' + category + '**\n\n';
+                  body += '**Problem:** ' + issue.issue + '\n\n';
                   
                   if (issue.code) {
-                    body += '```svelte\n' + issue.code + '\n```\n\n';
+                    body += '**Current Code:**\n```svelte\n' + issue.code + '\n```\n\n';
                   }
                   
                   if (issue.suggestion) {
-                    body += '**Fix:**\n```svelte\n' + issue.suggestion + '\n```\n\n';
+                    body += '**Fixed Code:**\n```svelte\n' + issue.suggestion + '\n```\n\n';
                   }
                   
                   if (issue.impact) {
-                    body += '💡 ' + issue.impact;
+                    body += '**Why:** ' + issue.impact + '\n\n';
                   }
                   
+                  body += '_Category: ' + issue.category + ' | Severity: ' + issue.severity + '_';
+                  
+                  console.log('Comment body:', body);
+                  
                   try {
-                    await github.rest.pulls.createReviewComment({
+                    const response = await github.rest.pulls.createReviewComment({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
                       pull_number: context.issue.number,
@@ -182,12 +199,36 @@ jobs:
                       side: 'RIGHT'
                     });
                     newComments++;
+                    console.log('✅ Posted comment on', fileData.file, 'line', issue.line);
                   } catch (err) {
-                    console.log('Failed inline comment:', err.message);
+                    failedComments++;
+                    console.log('❌ Failed to post comment:', err.message);
+                    console.log('Error details:', JSON.stringify(err, null, 2));
+                    
+                    // Fallback: try without line number (post as general comment)
+                    try {
+                      const fallbackBody = '**File:** `' + fileData.file + '` - Line ' + issue.line + '\n\n' + body;
+                      await github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: fallbackBody
+                      });
+                      console.log('✅ Posted as general comment');
+                    } catch (e2) {
+                      console.log('❌ Fallback also failed:', e2.message);
+                    }
                   }
                 }
               }
+            } else {
+              console.log('No issues to post');
             }
+            
+            console.log('\nSummary:');
+            console.log('- New comments posted:', newComments);
+            console.log('- Failed comments:', failedComments);
+            console.log('- Resolved comments:', resolvedCount);
             
             // POST REVIEW SUMMARY
             let reviewEvent = 'COMMENT';
@@ -202,21 +243,22 @@ jobs:
               reviewBody += '✅ No files changed\n';
             } else if (results.criticalCount > 0) {
               reviewEvent = 'REQUEST_CHANGES';
-              reviewBody += '🔴 **' + results.criticalCount + ' critical** - Fix required\n';
+              reviewBody += '🔴 **' + results.criticalCount + ' critical issue(s)**\n\n';
             } else if (results.errorCount > 0) {
               reviewEvent = 'COMMENT';
-              reviewBody += '🟠 **' + results.errorCount + ' error(s)**\n';
+              reviewBody += '🟠 **' + results.errorCount + ' error(s)**\n\n';
             } else if (results.warningCount > 0) {
               reviewEvent = 'APPROVE';
-              reviewBody += '✅ Approved (' + results.warningCount + ' warnings)\n';
+              reviewBody += '✅ Approved (' + results.warningCount + ' warnings)\n\n';
             } else {
               reviewEvent = 'APPROVE';
-              reviewBody += '✅ Perfect! No issues\n';
+              reviewBody += '✅ Perfect! No issues\n\n';
             }
             
-            reviewBody += '\n**Stats:**\n';
+            reviewBody += '**Stats:**\n';
             reviewBody += '- Reviewed: ' + results.filesReviewed + ' files\n';
-            if (newComments > 0) reviewBody += '- New comments: ' + newComments + '\n';
+            if (newComments > 0) reviewBody += '- Inline comments: ' + newComments + '\n';
+            if (failedComments > 0) reviewBody += '- Failed to post: ' + failedComments + '\n';
             if (resolvedCount > 0) reviewBody += '- Resolved: ' + resolvedCount + '\n';
             
             if (results.analytics && results.analytics.insights) {
@@ -231,9 +273,17 @@ jobs:
                 event: reviewEvent,
                 body: reviewBody
               });
-              console.log('Review posted:', reviewEvent);
+              console.log('✅ Review posted:', reviewEvent);
             } catch (e) {
-              console.log('Review error:', e.message);
+              console.log('❌ Review error:', e.message);
+              
+              // Fallback to issue comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: reviewBody
+              });
             }
       
       - name: Save Review State
