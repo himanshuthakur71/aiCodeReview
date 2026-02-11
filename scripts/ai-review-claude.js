@@ -16,19 +16,51 @@ const anthropic = new Anthropic({
 
 function getChangedFiles() {
   try {
-    const baseBranch = process.env.GITHUB_BASE_REF || 'main';
-    const headBranch = process.env.GITHUB_HEAD_REF || 'HEAD';
-    
     let changedFiles;
     
     if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
-      const cmd = `git diff --name-only origin/${baseBranch}...${headBranch}`;
-      changedFiles = execSync(cmd, { encoding: 'utf8' });
+      // In GitHub Actions
+      const baseBranch = process.env.GITHUB_BASE_REF || 'main';
+      const headSha = process.env.GITHUB_SHA || 'HEAD';
+      
+      // Try different git diff commands
+      try {
+        // Method 1: Compare with fetched base
+        changedFiles = execSync(
+          `git diff --name-only origin/${baseBranch}...${headSha}`,
+          { encoding: 'utf8' }
+        );
+      } catch (e1) {
+        try {
+          // Method 2: Compare with local base
+          changedFiles = execSync(
+            `git diff --name-only ${baseBranch}...HEAD`,
+            { encoding: 'utf8' }
+          );
+        } catch (e2) {
+          try {
+            // Method 3: Show files in last commit
+            changedFiles = execSync(
+              'git diff --name-only HEAD~1 HEAD',
+              { encoding: 'utf8' }
+            );
+          } catch (e3) {
+            // Method 4: Fallback to all svelte files
+            console.log('Using fallback: reviewing all Svelte files');
+            return findAllSvelteFiles('./src');
+          }
+        }
+      }
     } else {
+      // Local development
       changedFiles = execSync('git diff --name-only HEAD', { encoding: 'utf8' });
       
       if (!changedFiles.trim()) {
         changedFiles = execSync('git diff --name-only main...HEAD', { encoding: 'utf8' });
+      }
+      
+      if (!changedFiles.trim()) {
+        changedFiles = execSync('git diff --name-only HEAD~1 HEAD', { encoding: 'utf8' });
       }
     }
     
@@ -41,11 +73,29 @@ function getChangedFiles() {
     return files;
     
   } catch (error) {
-    console.log('Could not get changed files:', error.message);
-    return [];
+    console.log('Git diff failed:', error.message);
+    console.log('Falling back to all Svelte files in src/');
+    return findAllSvelteFiles('./src');
   }
 }
 
+function findAllSvelteFiles(dir) {
+  const files = [];
+  if (!fs.existsSync(dir)) return files;
+  
+  fs.readdirSync(dir).forEach(item => {
+    const full = path.join(dir, item);
+    if (fs.statSync(full).isDirectory()) {
+      if (!['node_modules', '.svelte-kit', 'build'].includes(item)) {
+        files.push(...findAllSvelteFiles(full));
+      }
+    } else if (item.endsWith('.svelte')) {
+      files.push(full);
+    }
+  });
+  
+  return files;
+}
 async function reviewWithClaude(filePath, reviewContent, changedLines, strategy) {
   const changedLinesStr = changedLines && changedLines.length > 0 
     ? `Lines ${changedLines.join(', ')}` 
