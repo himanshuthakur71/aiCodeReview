@@ -6,7 +6,7 @@
   let isLoading = false;
   
   //  Issue 2: No error handling in fetch
-  function loadUserData(userId) {
+  function loadUserData() {
     isLoading = true;
     fetch('/api/users/' + userId).then(response => {
       return response.json();
