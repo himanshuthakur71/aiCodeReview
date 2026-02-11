@@ -12,7 +12,9 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"ai-review": "node scripts/ai-review-claude.js"
+		"ai-review": "node scripts/ai-review-claude.js",
+		"ai-analytics": "node scripts/show-analytics.js",
+		"clear-cache": "node scripts/clear-cache.js"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.2",
@@ -38,6 +40,10 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.74.0",
-		"dotenv": "^17.2.4"
+		"child_process": "^1.0.2",
+		"crypto": "^1.0.1",
+		"dotenv": "^17.2.4",
+		"fs": "^0.0.1-security",
+		"path": "^0.12.7"
 	}
 }
