@@ -1,19 +1,25 @@
-name: Claude AI Code Review
+name: Enhanced AI Code Review
 
 on:
   pull_request:
     branches: [main, develop]
 
 jobs:
-  claude-review:
+  ai-review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     
     steps:
-      - name: Checkout code
+      - name: Checkout with history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      
+      - name: Fetch base
+        run: git fetch origin ${{ github.base_ref }}:${{ github.base_ref }}
       
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -21,18 +27,23 @@ jobs:
           node-version: '20'
           cache: 'npm'
       
-      - name: Install dependencies
+      - name: Install
         run: npm ci
       
-      - name: Run Claude AI Review
+      - name: Enhanced AI Review
+        id: review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: npm run ai-review
-        continue-on-error: true
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          npm run ai-review || true
+          echo "done=true" >> $GITHUB_OUTPUT
       
-      - name: Post detailed inline comments
+      - name: Post Review
         uses: actions/github-script@v7
-        if: always()
+        if: always() && steps.review.outputs.done
         with:
           script: |
             const fs = require('fs');
@@ -40,63 +51,70 @@ jobs:
             try {
               results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
             } catch (e) {
-              console.log('No results file');
               return;
             }
+            
+            const sev = { critical: '🔴', error: '🟠', warning: '🟡', info: '🔵' };
+            const lab = { critical: 'CRITICAL', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
+            
             if (!results.issues || results.issues.length === 0) {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
+              await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: 'Claude AI Code Review: No issues found!'
+                pull_number: context.issue.number,
+                event: 'APPROVE',
+                body: 'AI Review: ' + (results.filesReviewed === 0 ? 'No files changed' : 'All passed!')
               });
               return;
             }
-            for (const fileData of results.issues) {
-              for (const issue of fileData.issues) {
-                const sev = issue.severity === 'error' ? 'ERROR' : 'WARNING';
-                const cat = issue.category ? issue.category.toUpperCase() : 'GENERAL';
-                let body = '';
-                body += '**' + sev + ': ' + cat + '**\n\n';
-                body += '**Code:**\n```svelte\n' + (issue.code || 'N/A') + '\n```\n\n';
-                body += '**Issue:** ' + issue.issue + '\n\n';
-                if (issue.suggestion) {
-                  body += '**Suggestion:**\n```svelte\n' + issue.suggestion + '\n```\n\n';
-                }
-                body += '\nPosted by Claude AI';
-                try {
-                  await github.rest.pulls.createReviewComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: context.issue.number,
-                    body: body,
-                    path: fileData.file,
-                    line: issue.line,
-                    side: 'RIGHT'
-                  });
-                } catch (err) {
-                  const fb = '**File:** ' + fileData.file + ' Line ' + issue.line + '\n\n' + body;
-                  await github.rest.issues.createComment({
-                    issue_number: context.issue.number,
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    body: fb
-                  });
-                }
+            
+            let comments = [];
+            for (const fd of results.issues) {
+              for (const iss of fd.issues) {
+                let body = sev[iss.severity] + ' **' + lab[iss.severity] + ': ' + (iss.category || 'GENERAL').toUpperCase() + '**\n\n';
+                body += '**Problem:** ' + iss.issue + '\n\n';
+                if (iss.code) body += '**Code:**\n```svelte\n' + iss.code + '\n```\n\n';
+                if (iss.suggestion) body += '**Fix:**\n```svelte\n' + iss.suggestion + '\n```\n\n';
+                if (iss.impact) body += '**Impact:** ' + iss.impact + '\n\n';
+                body += '\n_AI Review_';
+                comments.push({ path: fd.file, line: iss.line, body });
               }
             }
-            const total = results.totalIssues || 0;
-            let sum = 'Claude AI Code Review Summary\n\n';
-            sum += 'Total Issues: ' + total + '\n';
-            sum += 'Files with Issues: ' + results.filesWithIssues + '\n';
-            sum += 'Files Reviewed: ' + results.filesReviewed + '\n\n';
-            sum += 'Issues by File:\n\n';
-            results.issues.forEach(f => {
-              sum += '- ' + f.file + ': ' + f.issues.length + ' issues\n';
-            });
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: sum
-            });
+            
+            let event = 'COMMENT';
+            let body = 'AI Code Review\n\n';
+            
+            if (results.criticalCount > 0) {
+              event = 'REQUEST_CHANGES';
+              body += '**CRITICAL ISSUES FOUND**\n\n';
+            } else if (results.errorCount > 0) {
+              body += '**Errors Found**\n\n';
+            } else if (results.warningCount > 0) {
+              event = 'APPROVE';
+              body += '**Approved with Warnings**\n\n';
+            } else {
+              event = 'APPROVE';
+              body += '**All Passed**\n\n';
+            }
+            
+            body += 'Files: ' + results.filesReviewed + '\n';
+            body += 'Critical: ' + results.criticalCount + '\n';
+            body += 'Errors: ' + results.errorCount + '\n';
+            body += 'Warnings: ' + results.warningCount + '\n';
+            
+            if (results.analytics && results.analytics.insights) {
+              body += '\n' + results.analytics.insights;
+            }
+            
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: event,
+                body: body,
+                comments: comments
+              });
+            } catch (err) {
+              console.log('Error:', err.message);
+            }

@@ -1,136 +1,14 @@
 {
-  "timestamp": "2026-02-10T14:24:19.784Z",
+  "timestamp": "2026-02-11T04:28:27.727Z",
   "model": "claude-3-haiku-20240307",
-  "filesReviewed": 3,
-  "filesWithIssues": 3,
-  "totalIssues": 14,
-  "issues": [
-    {
-      "file": "src\\lib\\components\\UserProfile.svelte",
-      "issues": [
-        {
-          "line": 4,
-          "code": "let userName = '';",
-          "severity": "warning",
-          "category": "svelte-5",
-          "issue": "Not using Svelte 5 runes ($state)",
-          "suggestion": "let $userName = '';"
-        },
-        {
-          "line": 5,
-          "code": "let userAge = 0;",
-          "severity": "warning",
-          "category": "svelte-5",
-          "issue": "Not using Svelte 5 runes ($state)",
-          "suggestion": "let $userAge = 0;"
-        },
-        {
-          "line": 6,
-          "code": "let isLoading = false;",
-          "severity": "warning",
-          "category": "svelte-5",
-          "issue": "Not using Svelte 5 runes ($state)",
-          "suggestion": "let $isLoading = false;"
-        },
-        {
-          "line": 11,
-          "code": "fetch('/api/users/' + userId).then(response => {",
-          "severity": "error",
-          "category": "security",
-          "issue": "Potential security vulnerability: Unescaped user input in URL",
-          "suggestion": "fetch(`/api/users/${encodeURIComponent(userId)}`).then(response => {"
-        },
-        {
-          "line": 15,
-          "code": "$: displayName = userName.toUpperCase();",
-          "severity": "error",
-          "category": "svelte-5",
-          "issue": "Using old reactive syntax instead of Svelte 5 runes",
-          "suggestion": "let $displayName = $derived(() => $userName.toUpperCase());"
-        },
-        {
-          "line": 21,
-          "code": "console.log('UserProfile component loaded');",
-          "severity": "warning",
-          "category": "performance",
-          "issue": "Logging in production code can impact performance",
-          "suggestion": "// Remove this line in production"
-        },
-        {
-          "line": 32,
-          "code": "<img src=\"/avatar.png\" class=\"avatar\" />",
-          "severity": "error",
-          "category": "accessibility",
-          "issue": "Image without alt text",
-          "suggestion": "<img src=\"/avatar.png\" class=\"avatar\" alt=\"User avatar\" />"
-        },
-        {
-          "line": 44,
-          "code": "<div onclick={() => loadUserData(123)} class=\"load-button\">",
-          "severity": "error",
-          "category": "accessibility",
-          "issue": "Using div with onclick instead of button",
-          "suggestion": "<button on:click={() => loadUserData(123)} class=\"load-button\">Load User Data</button>"
-        },
-        {
-          "line": 63,
-          "code": ".user-info p { color: #ccc; background: white; }",
-          "severity": "error",
-          "category": "accessibility",
-          "issue": "Poor color contrast",
-          "suggestion": ".user-info p { color: #333; background: #f5f5f5; }"
-        }
-      ]
-    },
-    {
-      "file": "src\\routes\\+layout.svelte",
-      "issues": [
-        {
-          "line": 5,
-          "code": "let { children } = $props();",
-          "severity": "error",
-          "category": "svelte-5",
-          "issue": "Incorrect usage of Svelte 5 runes",
-          "suggestion": "let { children } = $$props;"
-        },
-        {
-          "line": 9,
-          "code": "{@render children()}",
-          "severity": "error",
-          "category": "accessibility",
-          "issue": "The `@render` directive is not accessible and should be replaced with a standard Svelte component",
-          "suggestion": "<div>{children}</div>"
-        },
-        {
-          "line": 3,
-          "code": "import favicon from '$lib/assets/favicon.svg';",
-          "severity": "warning",
-          "category": "performance",
-          "issue": "Importing SVG files can impact performance, consider using a smaller image format or lazy-loading the SVG",
-          "suggestion": "Use a smaller image format like PNG or JPEG, or lazy-load the SVG using the `<svelte:head>` element."
-        },
-        {
-          "line": 8,
-          "code": "<svelte:head><link rel=\"icon\" href={favicon} /></svelte:head>",
-          "severity": "info",
-          "category": "best-practices",
-          "issue": "Using `<svelte:head>` to set the favicon is a best practice",
-          "suggestion": "No changes needed, this is a good practice."
-        }
-      ]
-    },
-    {
-      "file": "src\\routes\\+page.svelte",
-      "issues": [
-        {
-          "line": 15,
-          "code": "$: displayName = userName.toUpperCase();",
-          "severity": "error",
-          "category": "svelte-5",
-          "issue": "Using old reactive syntax instead of Svelte 5 runes",
-          "suggestion": "let displayName = $derived(userName.toUpperCase());"
-        }
-      ]
-    }
-  ]
+  "filesReviewed": 0,
+  "filesWithIssues": 0,
+  "totalIssues": 0,
+  "criticalCount": 0,
+  "errorCount": 0,
+  "warningCount": 0,
+  "infoCount": 0,
+  "reviewStatus": "approved",
+  "reviewMessage": "No Svelte files changed",
+  "issues": []
 }
