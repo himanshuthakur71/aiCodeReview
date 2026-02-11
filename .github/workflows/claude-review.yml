@@ -1,4 +1,4 @@
-name: AI Code Review with Auto-Approve
+name: AI Code Review
 
 on:
   pull_request:
@@ -26,7 +26,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       
       - name: Fetch base branch
-        run: git fetch origin ${{ github.base_ref }}
+        run: |
+          git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+          git branch -a
       
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,12 +42,14 @@ jobs:
       - name: AI Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_NAME: pull_request
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: npm run ai-review || true
       
-      - name: Post Review and Auto-Approve
+      - name: Post Review with Approval
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.generate-token.outputs.token }}
@@ -55,14 +59,13 @@ jobs:
             try {
               results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
             } catch (e) {
-              console.log('No results');
+              console.log('No results file');
               return;
             }
             
             const sev = { critical: '🔴', error: '🟠', warning: '🟡', info: '🔵' };
             const lab = { critical: 'CRITICAL', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
             
-            // Build inline comments
             let comments = [];
             if (results.issues && results.issues.length > 0) {
               for (const fd of results.issues) {
@@ -78,48 +81,55 @@ jobs:
               }
             }
             
-            // Determine review event
             let reviewEvent = 'APPROVE';
             let body = '## 🤖 AI Code Review\n\n';
             
             if (results.filesReviewed === 0) {
-              body += '✅ **No Svelte files changed**\n\n';
+              body += '**No Svelte files changed**\n\n';
+              body += 'No review needed.\n';
               reviewEvent = 'APPROVE';
             } else if (results.criticalCount > 0) {
               reviewEvent = 'REQUEST_CHANGES';
-              body += '🔴 **CRITICAL ISSUES - Changes Required**\n\n';
-              body += '- Files: ' + results.filesReviewed + '\n';
+              body += '**CRITICAL ISSUES FOUND**\n\n';
+              body += '**Must be fixed before merging**\n\n';
+              body += '**Summary:**\n';
+              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
               body += '- Critical: ' + results.criticalCount + '\n';
               body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n\n';
-              body += '❌ **Cannot auto-approve - fix critical issues first**\n';
+              body += '- Warnings: ' + results.warningCount + '\n';
             } else if (results.errorCount > 0) {
               reviewEvent = 'COMMENT';
-              body += '🟠 **Errors Found**\n\n';
-              body += '- Files: ' + results.filesReviewed + '\n';
+              body += '**Errors Found**\n\n';
+              body += 'Please review and fix.\n\n';
+              body += '**Summary:**\n';
+              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
               body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n\n';
-              body += '⚠️ **Review recommended before merging**\n';
+              body += '- Warnings: ' + results.warningCount + '\n';
             } else if (results.warningCount > 0) {
               reviewEvent = 'APPROVE';
-              body += '✅ **Approved with Minor Warnings**\n\n';
-              body += '- Files: ' + results.filesReviewed + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n\n';
-              body += '✅ **Auto-approved by AI - safe to merge**\n';
+              body += '**Approved with Minor Warnings**\n\n';
+              body += 'Code is acceptable. Consider fixing warnings.\n\n';
+              body += '**Summary:**\n';
+              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
+              body += '- Warnings: ' + results.warningCount + '\n';
+              body += '- Info: ' + results.infoCount + '\n';
             } else {
               reviewEvent = 'APPROVE';
-              body += '✅ **All Checks Passed!**\n\n';
-              body += '- Files: ' + results.filesReviewed + '\n';
-              body += '- No issues found\n\n';
-              body += '✅ **Auto-approved by AI - safe to merge**\n';
+              body += '**All Checks Passed**\n\n';
+              body += 'No issues found!\n\n';
+              body += '**Summary:**\n';
+              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
             }
             
             if (results.changedFiles && results.changedFiles.length > 0) {
-              body += '\n**Reviewed Files:**\n';
+              body += '\n**Files Reviewed:**\n';
               results.changedFiles.forEach(f => body += '- `' + f + '`\n');
             }
             
-            // Post review
+            if (results.analytics && results.analytics.insights) {
+              body += '\n---\n' + results.analytics.insights;
+            }
+            
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
@@ -131,40 +141,11 @@ jobs:
               });
               console.log('Review posted:', reviewEvent);
             } catch (err) {
-              console.log('Error:', err.message);
+              console.log('Error posting review:', err.message);
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 body: body
               });
-            }
-      
-      - name: Enable Auto-Merge
-        if: success()
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.generate-token.outputs.token }}
-          script: |
-            const fs = require('fs');
-            let results;
-            try {
-              results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
-            } catch (e) {
-              return;
-            }
-            
-            // Only enable auto-merge if no critical issues
-            if (results.criticalCount === 0 && results.errorCount === 0) {
-              try {
-                await github.rest.pulls.enableAutoMerge({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: context.issue.number,
-                  merge_method: 'squash'
-                });
-                console.log('Auto-merge enabled');
-              } catch (err) {
-                console.log('Could not enable auto-merge:', err.message);
-              }
             }
