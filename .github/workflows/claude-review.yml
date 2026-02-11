@@ -1,4 +1,4 @@
-name: Enhanced AI Code Review
+name: AI Code Review with Auto-Approve
 
 on:
   pull_request:
@@ -12,6 +12,13 @@ jobs:
       pull-requests: write
     
     steps:
+      - name: Generate App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
@@ -19,9 +26,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       
       - name: Fetch base branch
-        run: |
-          git fetch origin ${{ github.base_ref }}
-          git branch -a
+        run: git fetch origin ${{ github.base_ref }}
       
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -32,90 +37,32 @@ jobs:
       - name: Install
         run: npm ci
       
-      - name: Enhanced AI Review
-        id: review
+      - name: AI Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
         run: npm run ai-review || true
-        continue-on-error: true
       
-      - name: Add labels based on review
+      - name: Post Review and Auto-Approve
         uses: actions/github-script@v7
-        if: always()
         with:
+          github-token: ${{ steps.generate-token.outputs.token }}
           script: |
             const fs = require('fs');
             let results;
             try {
               results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
             } catch (e) {
-              return;
-            }
-            
-            // Remove old AI labels
-            const labels = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            
-            for (const label of labels.data) {
-              if (label.name.startsWith('ai-review:')) {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  name: label.name
-                });
-              }
-            }
-            
-            // Add new label based on results
-            let labelName = '';
-            if (results.criticalCount > 0) {
-              labelName = 'ai-review:critical-issues';
-            } else if (results.errorCount > 0) {
-              labelName = 'ai-review:needs-fixes';
-            } else if (results.warningCount > 0) {
-              labelName = 'ai-review:approved-with-warnings';
-            } else if (results.filesReviewed > 0) {
-              labelName = 'ai-review:approved';
-            }
-            
-            if (labelName) {
-              try {
-                await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  labels: [labelName]
-                });
-              } catch (e) {
-                console.log('Could not add label (might not exist yet)');
-              }
-            }
-
-      - name: Post Review Comments
-        uses: actions/github-script@v7
-        if: always()
-        with:
-          script: |
-            const fs = require('fs');
-            let results;
-            try {
-              results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
-            } catch (e) {
-              console.log('No results file');
+              console.log('No results');
               return;
             }
             
             const sev = { critical: '🔴', error: '🟠', warning: '🟡', info: '🔵' };
             const lab = { critical: 'CRITICAL', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
             
-            // Create review comments
+            // Build inline comments
             let comments = [];
             if (results.issues && results.issues.length > 0) {
               for (const fd of results.issues) {
@@ -131,80 +78,93 @@ jobs:
               }
             }
             
-            // Determine status (no APPROVE - GitHub Actions can't approve)
-            let reviewEvent = 'COMMENT';
-            let body = '## AI Code Review Results\n\n';
+            // Determine review event
+            let reviewEvent = 'APPROVE';
+            let body = '## 🤖 AI Code Review\n\n';
             
             if (results.filesReviewed === 0) {
               body += '✅ **No Svelte files changed**\n\n';
-              body += 'No review needed for this PR.';
+              reviewEvent = 'APPROVE';
             } else if (results.criticalCount > 0) {
               reviewEvent = 'REQUEST_CHANGES';
-              body += '🔴 **CRITICAL ISSUES FOUND**\n\n';
-              body += '⚠️ Human review required before merging.\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
+              body += '🔴 **CRITICAL ISSUES - Changes Required**\n\n';
+              body += '- Files: ' + results.filesReviewed + '\n';
               body += '- Critical: ' + results.criticalCount + '\n';
               body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
+              body += '- Warnings: ' + results.warningCount + '\n\n';
+              body += '❌ **Cannot auto-approve - fix critical issues first**\n';
             } else if (results.errorCount > 0) {
+              reviewEvent = 'COMMENT';
               body += '🟠 **Errors Found**\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
+              body += '- Files: ' + results.filesReviewed + '\n';
               body += '- Errors: ' + results.errorCount + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
+              body += '- Warnings: ' + results.warningCount + '\n\n';
+              body += '⚠️ **Review recommended before merging**\n';
             } else if (results.warningCount > 0) {
-              body += '🟡 **Minor Warnings**\n\n';
-              body += '✅ Code is acceptable for merging.\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
-              body += '- Warnings: ' + results.warningCount + '\n';
-              body += '- Info: ' + results.infoCount + '\n';
+              reviewEvent = 'APPROVE';
+              body += '✅ **Approved with Minor Warnings**\n\n';
+              body += '- Files: ' + results.filesReviewed + '\n';
+              body += '- Warnings: ' + results.warningCount + '\n\n';
+              body += '✅ **Auto-approved by AI - safe to merge**\n';
             } else {
+              reviewEvent = 'APPROVE';
               body += '✅ **All Checks Passed!**\n\n';
-              body += '**Summary:**\n';
-              body += '- Files Reviewed: ' + results.filesReviewed + '\n';
-              body += '- No issues found\n';
+              body += '- Files: ' + results.filesReviewed + '\n';
+              body += '- No issues found\n\n';
+              body += '✅ **Auto-approved by AI - safe to merge**\n';
             }
             
             if (results.changedFiles && results.changedFiles.length > 0) {
-              body += '\n**Files Reviewed:**\n';
+              body += '\n**Reviewed Files:**\n';
               results.changedFiles.forEach(f => body += '- `' + f + '`\n');
-            }
-            
-            if (results.analytics && results.analytics.insights) {
-              body += '\n---\n' + results.analytics.insights;
             }
             
             // Post review
             try {
-              if (comments.length > 0) {
-                await github.rest.pulls.createReview({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: context.issue.number,
-                  event: reviewEvent,
-                  body: body,
-                  comments: comments
-                });
-              } else {
-                // No inline comments, just post summary
-                await github.rest.issues.createComment({
-                  issue_number: context.issue.number,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  body: body
-                });
-              }
-              console.log('Review posted successfully');
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: reviewEvent,
+                body: body,
+                comments: comments
+              });
+              console.log('Review posted:', reviewEvent);
             } catch (err) {
-              console.log('Error posting review:', err.message);
-              
-              // Fallback: post as regular comment
+              console.log('Error:', err.message);
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 body: body
               });
+            }
+      
+      - name: Enable Auto-Merge
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.generate-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            let results;
+            try {
+              results = JSON.parse(fs.readFileSync('ai-review-results.json', 'utf8'));
+            } catch (e) {
+              return;
+            }
+            
+            // Only enable auto-merge if no critical issues
+            if (results.criticalCount === 0 && results.errorCount === 0) {
+              try {
+                await github.rest.pulls.enableAutoMerge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  merge_method: 'squash'
+                });
+                console.log('Auto-merge enabled');
+              } catch (err) {
+                console.log('Could not enable auto-merge:', err.message);
+              }
             }
