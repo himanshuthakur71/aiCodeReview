@@ -19,56 +19,46 @@ function getChangedFiles() {
     let changedFiles = '';
     
     if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
-      console.log('In GitHub Actions PR mode');
       const baseSha = process.env.PR_BASE_SHA;
       const headSha = process.env.PR_HEAD_SHA;
-      const baseBranch = process.env.GITHUB_BASE_REF || 'main';
       
-      // Try multiple methods
-      const methods = [
-        // Method 1: SHA comparison
-        baseSha && headSha ? `git diff --name-only ${baseSha}...${headSha}` : null,
-        // Method 2: Branch comparison
-        `git diff --name-only origin/${baseBranch}...HEAD`,
-        // Method 3: HEAD comparison
-        `git diff --name-only HEAD^..HEAD`,
-        // Method 4: Show all files in PR
-        `git diff --name-only FETCH_HEAD`,
-        // Method 5: List all svelte files (fallback)
-        null
-      ];
-      
-      for (const method of methods) {
-        if (!method) continue;
-        
+      if (baseSha && headSha) {
         try {
-          console.log('Trying:', method);
-          changedFiles = execSync(method, { encoding: 'utf8' });
-          if (changedFiles.trim()) {
-            console.log('Success with:', method);
-            console.log('Raw output:', changedFiles);
-            break;
+          changedFiles = execSync(
+            `git diff --name-only ${baseSha}...${headSha}`,
+            { encoding: 'utf8' }
+          );
+          console.log('Using SHA comparison');
+        } catch (e1) {
+          try {
+            const base = process.env.GITHUB_BASE_REF || 'main';
+            changedFiles = execSync(
+              `git diff --name-only origin/${base}...HEAD`,
+              { encoding: 'utf8' }
+            );
+            console.log('Using branch comparison');
+          } catch (e2) {
+            try {
+              changedFiles = execSync(
+                'git diff --name-only HEAD~1 HEAD',
+                { encoding: 'utf8' }
+              );
+              console.log('Using commit comparison');
+            } catch (e3) {
+              console.log('All git methods failed, using fallback');
+              return findAllSvelteFiles('./src');
+            }
           }
-        } catch (e) {
-          console.log('Failed:', e.message);
         }
-      }
-      
-      // Ultimate fallback: get all svelte files
-      if (!changedFiles.trim()) {
-        console.log('All git methods failed, scanning all files');
+      } else {
+        console.log('No PR SHAs available, using fallback');
         return findAllSvelteFiles('./src');
       }
     } else {
-      // Local development
-      console.log('Local development mode');
       try {
         changedFiles = execSync('git diff --name-only HEAD', { encoding: 'utf8' });
         if (!changedFiles.trim()) {
           changedFiles = execSync('git diff --name-only main...HEAD', { encoding: 'utf8' });
-        }
-        if (!changedFiles.trim()) {
-          changedFiles = execSync('git diff --name-only HEAD^..HEAD', { encoding: 'utf8' });
         }
       } catch (e) {
         console.log('Local git failed, using fallback');
@@ -76,37 +66,20 @@ function getChangedFiles() {
       }
     }
     
-    console.log('Changed files output:', changedFiles);
-    
     const files = changedFiles
       .split('\n')
       .map(f => f.trim())
-      .filter(f => {
-        console.log('Checking file:', f);
-        return f.endsWith('.svelte');
-      })
-      .filter(f => {
-        const exists = f && fs.existsSync(f);
-        console.log('File exists?', f, exists);
-        return exists;
-      });
+      .filter(f => f.endsWith('.svelte'))
+      .filter(f => f && fs.existsSync(f));
     
-    console.log('Final filtered files:', files);
-    
-    if (files.length === 0) {
-      console.log('No .svelte files in diff, checking all src/ files');
-      return findAllSvelteFiles('./src');
-    }
-    
+    console.log('Found', files.length, 'changed Svelte files');
     return files;
     
   } catch (error) {
     console.log('Error in getChangedFiles:', error.message);
-    console.log('Using fallback: all files in src/');
     return findAllSvelteFiles('./src');
   }
 }
-
 
 function findAllSvelteFiles(dir) {
   const files = [];
